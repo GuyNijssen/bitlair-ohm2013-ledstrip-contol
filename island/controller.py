@@ -277,8 +277,9 @@ def main():
 
   threading.Thread(target=ctl.serve_control, args=(sock,), daemon=True).start()
   threading.Thread(target=ctl.supervise, daemon=True).start()
-  log.info('island %s: %d poles, brightness %.2f, %d cues, control %s:%d',
-           ctl.name, len(ctl.poles), ctl.brightness, len(ctl.cues), *ctl.control)
+  log.info('island %s: sending to %s, brightness %.2f, %d cues, commands on %s:%d',
+           ctl.name, ', '.join(f'{h}:{p}' for h, p in ctl.poles),
+           ctl.brightness, len(ctl.cues), *ctl.control)
   ctl.play()
 
   ctl.strip2D.strip.artnet.clear()
