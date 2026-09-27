@@ -121,6 +121,18 @@ def main():
     check(st['errors'] == 0, 'no effect crashes')
     check(len(frames(sink, 1)) > 20, 'still streaming after switches')
 
+    effects = command({'cmd': 'status'})['effects']
+    check('plasma.Plasma' in effects and 'glow' in effects, f'effects listed ({len(effects)})')
+    check(not any(e.startswith(('fire2.', 'eyes.', 'mqtt_fire.')) for e in effects),
+          'terminal-only effects not listed')
+    st = command({'cmd': 'play', 'effect': 'fire.Fire'})
+    check(st['mode'] == 'play' and st['effect'] == 'fire.Fire', 'play any effect')
+    check('error' in command({'cmd': 'play', 'effect': 'os.system'}), 'unknown effect rejected')
+    command({'cmd': 'idle'})
+    st = command({'cmd': 'set_idle', 'effect': 'stars.Stars1'})
+    check(st['mode'] == 'idle' and st['effect'] == 'stars.Stars1', 'set_idle switches the running idle')
+    check(max(max(p[18:]) for p in frames(sink, 1)) <= int(255 * CAP), 'cap holds for new effects')
+
     second = subprocess.run(
       [sys.executable, os.path.join(HERE, 'controller.py'), '--config', f.name],
       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)

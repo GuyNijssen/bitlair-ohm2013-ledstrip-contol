@@ -4,5 +4,5 @@ description = "Island controller: idle effect plus cues on command."
 unit = "pimod-artnet.service"
 # JSON-over-UDP control port of the controller (see island/controller.py).
 control = "127.0.0.1:6455"
-actions = ["next", "idle", "cue"]
+actions = ["next", "idle", "cue", "play", "set_idle"]
 note = "When stopped, the poles reset to dim white after about 68 s."

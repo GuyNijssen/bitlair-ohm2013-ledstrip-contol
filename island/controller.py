@@ -13,6 +13,8 @@ Commands arrive as JSON over UDP on the control address (localhost):
   {"cmd": "next"}              -> play the next cue
   {"cmd": "cue", "index": 2}   -> play cue 2 (0-based)
   {"cmd": "idle"}              -> back to the idle effect
+  {"cmd": "play", "effect": "fire.Fire"}      -> play any effect until the next command
+  {"cmd": "set_idle", "effect": "stars.Stars1"} -> change the idle effect (until restart)
 """
 
 import argparse
@@ -20,6 +22,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -74,6 +77,21 @@ def load_effect(spec):
   return getattr(importlib.import_module(module), cls)
 
 
+def available_effects():
+  """Effect classes in singleSleeve/, found by reading the source so that
+  effects with heavy imports (pygame, paho) are only loaded when played."""
+  found = ['glow']
+  folder = os.path.join(ROOT, 'singleSleeve')
+  for fn in sorted(os.listdir(folder)):
+    module, ext = os.path.splitext(fn)
+    if ext != '.py' or module in HEADLESS_UNSAFE:
+      continue
+    with open(os.path.join(folder, fn), encoding='utf-8') as f:
+      for cls in re.findall(r'^class (\w+)\(Effect\)', f.read(), re.M):
+        found.append(f'{module}.{cls}')
+  return found
+
+
 class Controller:
 
   def __init__(self, cfg):
@@ -123,8 +141,10 @@ class Controller:
         'duration': float(cue.get('duration', 0)),  # 0 = until next command
       })
 
+    self.effects = available_effects()
     self.lock = threading.Lock()
-    self.pending = None      # ('idle',) or ('cue', index)
+    self.pending = None      # ('idle',), ('cue', index) or ('play', spec, cls)
+    self.effect_spec = None  # effect now playing, as module.Class
     self.current = None      # running Effect instance
     self.deadline = None     # end time of a timed cue
     self.mode = 'starting'
@@ -157,6 +177,21 @@ class Controller:
       self.request(('cue', index))
     elif cmd == 'idle':
       self.request(('idle',))
+    elif cmd in ('play', 'set_idle'):
+      spec = msg.get('effect')
+      if spec not in self.effects:
+        return {'error': f'unknown effect {spec!r}'}
+      try:
+        cls = load_effect(spec)
+      except Exception as e:
+        return {'error': f'{spec} cannot be loaded: {e}'}
+      if cmd == 'play':
+        self.request(('play', spec, cls))
+      else:
+        with self.lock:
+          self.idle_spec, self.idle_cls, self.idle_crashes = spec, cls, []
+        if self.mode == 'idle':
+          self.request(('idle',))
     elif cmd != 'status':
       return {'error': f'unknown command {cmd!r}'}
     # Reply with the state after the switch, not before it.
@@ -170,7 +205,9 @@ class Controller:
     return {
       'island': self.name,
       'mode': self.mode,
-      'effect': cue['effect'] if cue else self.idle_spec,
+      'effect': self.effect_spec,
+      'idle_effect': self.idle_spec,
+      'effects': self.effects,
       'cue': {'index': self.cue_index, 'name': cue['name']} if cue else None,
       'next_cue': self.cues[self.next_cue]['name'] if self.cues else None,
       'cues': [c['name'] for c in self.cues],
@@ -208,9 +245,16 @@ class Controller:
         self.next_cue = (index + 1) % len(self.cues)
         self.mode, self.cue_index = 'cue', index
         self.current = cue['cls'](self.strip2D)
+        self.effect_spec = cue['effect']
         self.deadline = time.time() + cue['duration'] if cue['duration'] else None
+      elif target[0] == 'play':
+        self.mode, self.cue_index = 'play', None
+        self.effect_spec, cls = target[1], target[2]
+        self.current = cls(self.strip2D)
+        self.deadline = None
       else:
         self.mode, self.cue_index = 'idle', None
+        self.effect_spec = self.idle_spec
         self.current = self.idle_cls(self.strip2D)
         self.deadline = None
       self.since = time.time()
