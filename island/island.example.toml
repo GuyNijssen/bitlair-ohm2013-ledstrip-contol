@@ -1,0 +1,33 @@
+# Island controller config. Copy to /etc/ledpoles/island.toml and edit.
+
+[island]
+name = "entrance"
+# Poles in physical order. A single broadcast address sends the same frame
+# to every pole on eth0. Add ":port" for the simulator, e.g. "127.0.0.1:7000".
+poles = ["192.168.89.255"]
+# Cap applied to every frame (0.0-1.0). The pole PSUs can't take full white.
+brightness = 0.4
+# UDP control port for the pi-agent (localhost only).
+control = "127.0.0.1:6455"
+
+[idle]
+# module.Class from singleSleeve/, or "glow" (built-in steady warm light).
+# fire2, eyes and mqtt_fire are refused until they run without a terminal.
+effect = "plasma.Plasma"
+
+# Cues play in order on "next". duration in seconds, 0 = until next command.
+# A timed cue returns to idle when it ends.
+[[cue]]
+name = "Welcome"
+effect = "rainbow.Rainbow"
+duration = 30
+
+[[cue]]
+name = "Start"
+effect = "flash.Flash"
+duration = 10
+
+[[cue]]
+name = "Lighthouse"
+effect = "lighthouse.Lighthouse"
+duration = 0

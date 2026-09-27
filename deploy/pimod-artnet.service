@@ -1,0 +1,22 @@
+[Unit]
+Description=LED poles island controller (Art-Net)
+Documentation=https://github.com/GuyNijssen/bitlair-ohm2013-ledstrip-contol
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ledpoles
+Group=ledpoles
+WorkingDirectory=/opt/ledpoles
+ExecStart=/usr/bin/python3 /opt/ledpoles/island/controller.py --config /etc/ledpoles/island.toml
+StandardInput=null
+# The poles reset to white after 60 s without frames: come back fast.
+Restart=always
+RestartSec=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
