@@ -9,7 +9,7 @@ branch based on upstream `master`, ready for a pull request.
 
 | Branch | File | Problem | Status |
 |---|---|---|---|
-| `fix/eyes-visibility` | `singleSleeve/eyes.py` | Leftover `on = [2, 2, 1]` made eyes max 2/255 brightness (look off); standalone `Strip2D(10, 10)` blanked pixels 100–149; 10 s wake-up delay; off-by-one CLI parsing of pairs/distance | Fixed, not yet sent upstream |
+| `fix/eyes-visibility` | `singleSleeve/eyes.py` | Leftover `on = [2, 2, 1]` made eyes max 2/255 brightness (look off); standalone `Strip2D(10, 10)` blanked pixels 100–149; 10 s wake-up delay; off-by-one CLI parsing of pairs/distance | PR [#7](https://github.com/AlbertVos/bitlair-ohm2013-ledstrip-contol/pull/7) open |
 | `fix/simstrip-python-exe` | `tools/simstrip.py` | Child windows were started as `python3 simstrip.py`: on Windows `python3` is the Microsoft Store placeholder so no window opened, and the relative path only worked from `tools/`. Now uses `sys.executable` and the script's absolute path | PR [#6](https://github.com/AlbertVos/bitlair-ohm2013-ledstrip-contol/pull/6) open |
 
 ## Known bugs, not fixed yet
