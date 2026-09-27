@@ -159,6 +159,10 @@ class Controller:
       self.request(('idle',))
     elif cmd != 'status':
       return {'error': f'unknown command {cmd!r}'}
+    # Reply with the state after the switch, not before it.
+    end = time.time() + 1
+    while self.pending and time.time() < end:
+      time.sleep(0.02)
     return self.status()
 
   def status(self):

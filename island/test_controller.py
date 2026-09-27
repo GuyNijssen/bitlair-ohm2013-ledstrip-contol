@@ -101,9 +101,8 @@ def main():
     check(st['mode'] == 'idle' and st['effect'] == 'glow', 'starts in idle')
     check(st['cues'] == ['Rainbow', 'Weird3'], 'fire2 cue refused (needs a terminal)')
 
-    st = command({'cmd': 'next'}); time.sleep(0.5)
-    st = command({'cmd': 'status'})
-    check(st['mode'] == 'cue' and st['cue']['name'] == 'Rainbow', 'next -> cue 0')
+    st = command({'cmd': 'next'})
+    check(st['mode'] == 'cue' and st['cue']['name'] == 'Rainbow', 'next -> cue 0 (reply shows new state)')
     check(all(max(p[18:]) <= int(255 * CAP) for p in frames(sink, 0.5)), 'cap holds during cue')
 
     time.sleep(2)
