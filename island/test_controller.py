@@ -121,6 +121,12 @@ def main():
     check('error' in command({'cmd': 'cue', 'index': 9}), 'bad cue index rejected')
     check(st['errors'] == 0, 'no effect crashes')
     check(len(frames(sink, 1)) > 20, 'still streaming after switches')
+
+    second = subprocess.run(
+      [sys.executable, os.path.join(HERE, 'controller.py'), '--config', f.name],
+      stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+    check(second.returncode != 0 and 'another controller' in second.stderr,
+          'second instance refuses to start')
   finally:
     proc.terminate()
     try:

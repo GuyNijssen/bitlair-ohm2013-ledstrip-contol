@@ -179,9 +179,7 @@ class Controller:
       'last_error': self.last_error,
     }
 
-  def serve_control(self):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(self.control)
+  def serve_control(self, sock):
     sock.settimeout(0.5)
     while self.running:
       try:
@@ -261,12 +259,23 @@ def main():
   with open(args.config, 'rb') as f:
     cfg = tomllib.load(f)
 
+  # Claim the control port before touching Art-Net. It doubles as the
+  # single-instance lock: port 6454 is opened with SO_REUSEADDR, so a
+  # second controller would otherwise start and interleave frames.
+  control = parse_addr(cfg.get('island', {}).get('control', '127.0.0.1:6455'))
+  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  try:
+    sock.bind(control)
+  except OSError as e:
+    sys.exit(f'control port {control[0]}:{control[1]} busy ({e.strerror}): '
+             'is another controller running? (systemctl status pimod-artnet)')
+
   ctl = Controller(cfg)
   # Replace the lib's SIGINT handler (it SIGKILLs itself) with a clean stop.
   signal.signal(signal.SIGINT, ctl.stop)
   signal.signal(signal.SIGTERM, ctl.stop)
 
-  threading.Thread(target=ctl.serve_control, daemon=True).start()
+  threading.Thread(target=ctl.serve_control, args=(sock,), daemon=True).start()
   threading.Thread(target=ctl.supervise, daemon=True).start()
   log.info('island %s: %d poles, brightness %.2f, %d cues, control %s:%d',
            ctl.name, len(ctl.poles), ctl.brightness, len(ctl.cues), *ctl.control)
