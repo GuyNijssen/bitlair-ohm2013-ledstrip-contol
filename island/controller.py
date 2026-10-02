@@ -146,11 +146,24 @@ class Controller:
     self.frames = 0
     self.last_frame = 0.0
     self.abort = False
+    self.send_error = None     # why frames can't go out right now (no route, link down)
     send = artnet.send
     def counted_send(current_strip):
       if self.abort:
         raise Switch()
-      send(current_strip)
+      try:
+        send(current_strip)
+      except OSError as e:
+        # No route / link down: skip this frame instead of crashing the
+        # effect, which would restart it in a tight loop. The effect keeps
+        # its own pace; frames flow again when the network is back.
+        if self.send_error is None:
+          log.error('cannot send frames: %s', e.strerror or e)
+        self.send_error = e.strerror or str(e)
+        return
+      if self.send_error is not None:
+        log.info('sending frames again')
+        self.send_error = None
       self.frames += 1
       self.last_frame = time.time()
     artnet.send = counted_send
@@ -254,6 +267,7 @@ class Controller:
       'last_frame_age': round(time.time() - self.last_frame, 2) if self.last_frame else None,
       'errors': self.errors,
       'last_error': self.last_error,
+      'send_error': self.send_error,
     }
 
   def serve_control(self, sock):
@@ -382,7 +396,10 @@ def main():
            ctl.brightness, len(ctl.cues), *ctl.control)
   ctl.play()
 
-  ctl.strip2D.strip.artnet.clear()
+  try:
+    ctl.strip2D.strip.artnet.clear()
+  except OSError:
+    pass  # no network: nothing to clear
   log.info('stopped; poles reset to dim white after ~68 s without frames')
 
 

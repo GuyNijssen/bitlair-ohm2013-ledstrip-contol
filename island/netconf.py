@@ -296,7 +296,7 @@ def write_dnsmasq(cfg):
     '# Written by netconf.py; changes here are overwritten.',
     'port=0',                       # DHCP only, no DNS
     f'interface={artnet_iface(cfg)}',
-    'bind-interfaces',
+    'bind-dynamic',                 # follows the address appearing/disappearing (link down, late switch)
     f"dhcp-range={cfg['dhcp_start']},{cfg['dhcp_end']},{net.netmask},{cfg['lease']}",
     'dhcp-option=3',                # no gateway for the poles
     'dhcp-option=6',                # no DNS
@@ -615,14 +615,24 @@ class NetConf:
     except ValueError as e:
       return {'error': str(e)}
 
-  def start_dhcp_if_needed(self):
-    """On start: run the DHCP server again if the mode wants it. The network
-    itself is left as NetworkManager brought it up."""
-    if self.cfg['mode'] != 'shared' and addresses(artnet_iface(self.cfg)):
+  def keep_dhcp_running(self):
+    """Every few seconds: the DHCP server runs whenever the mode needs one,
+    also when the Art-Net link came up after boot (pole switch switched on
+    later) or dnsmasq stopped. dnsmasq itself (bind-dynamic) follows the
+    address appearing and disappearing. The network is left as it is."""
+    complained = False
+    while True:
       try:
-        dhcp_on(self.cfg)
-      except RuntimeError as e:
-        log.error('DHCP server not started: %s', e)
+        if not self.applying and self.cfg['mode'] != 'shared' and \
+            run('systemctl', 'is-active', DHCP_UNIT, check=False).strip() != 'active':
+          log.info('DHCP server not running, starting it')
+          dhcp_on(self.cfg)
+          complained = False
+      except Exception as e:
+        if not complained:
+          log.error('DHCP server not started: %s', e)
+          complained = True
+      time.sleep(5)
 
 
 def main():
@@ -631,7 +641,7 @@ def main():
   nc = NetConf()
   sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
   sock.bind(CONTROL)
-  nc.start_dhcp_if_needed()
+  threading.Thread(target=nc.keep_dhcp_running, daemon=True).start()
   log.info('netconf: mode %s, control %s:%d', nc.cfg['mode'], *CONTROL)
   while True:
     data, peer = sock.recvfrom(4096)
