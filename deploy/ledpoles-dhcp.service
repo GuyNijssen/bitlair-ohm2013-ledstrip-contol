@@ -1,0 +1,9 @@
+[Unit]
+Description=LED poles DHCP server (dnsmasq, Art-Net interface only)
+After=network-online.target
+# Started, stopped and configured by pimod-artnet-net (netconf.py).
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/var/lib/ledpoles/dnsmasq-artnet.conf
+Restart=on-failure
+RestartSec=3
