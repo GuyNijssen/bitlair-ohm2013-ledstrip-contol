@@ -1,0 +1,18 @@
+[Unit]
+Description=LED poles Art-Net network (modes, DHCP server for the poles)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+# Root: changes NetworkManager profiles and starts/stops the DHCP server.
+# It only accepts commands on 127.0.0.1 (from pi-agent).
+ExecStart=/usr/bin/python3 /opt/ledpoles/island/netconf.py
+StateDirectory=ledpoles
+StandardInput=null
+Restart=always
+RestartSec=2
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

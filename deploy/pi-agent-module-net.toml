@@ -1,0 +1,7 @@
+# pi-agent module manifest, installed as /etc/pi-agent/modules.d/artnet-net.toml
+name = "Art-Net network"
+description = "Management and Art-Net links, DHCP server and address reservations for the poles."
+unit = "pimod-artnet-net.service"
+control = "127.0.0.1:6456"
+actions = ["set_config", "add_reservation", "remove_reservation", "wifi_rescan", "wifi_connect", "wifi_disconnect"]
+note = "Stopped: the network stays as it is, but it cannot be changed and the DHCP server is not restarted after a reboot."
