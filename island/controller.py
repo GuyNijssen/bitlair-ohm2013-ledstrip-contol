@@ -19,12 +19,14 @@ Commands arrive as JSON over UDP on the control address (localhost):
 
 import argparse
 import importlib
+import ipaddress
 import json
 import logging
 import os
 import re
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -67,6 +69,31 @@ def parse_addr(entry):
   return (host, int(port) if port else 6454)
 
 
+NETWORK_CONFIG = os.environ.get('NETCONF_CONFIG', '/etc/ledpoles/network.json')
+
+
+def auto_poles(port):
+  """poles = "auto": the broadcast address of the network the poles are on,
+  following the network module (netconf.py). wifi/vlan mode: the Art-Net
+  subnet. shared mode: the network eth0 is on now. None if unknown (eth0
+  without an address): the caller keeps what it had."""
+  try:
+    with open(NETWORK_CONFIG) as f:
+      net = json.load(f)
+  except (OSError, ValueError):
+    net = {}
+  mode = net.get('mode', 'shared')
+  if mode in ('wifi', 'vlan'):
+    subnet = ipaddress.ip_network(net.get('subnet', '192.168.89.0/24'))
+    return mode, [(str(subnet.broadcast_address), port)]
+  eth = net.get('eth', 'eth0')
+  out = subprocess.run(['ip', '-4', '-o', 'addr', 'show', 'dev', eth], capture_output=True, text=True).stdout
+  m = re.search(r'inet (\S+)', out)
+  if not m:
+    return mode, None
+  return mode, [(str(ipaddress.ip_interface(m.group(1)).network.broadcast_address), port)]
+
+
 def load_effect(spec):
   """'plasma.Plasma' -> class from singleSleeve/plasma.py"""
   if spec == 'glow':
@@ -97,7 +124,15 @@ class Controller:
   def __init__(self, cfg):
     island = cfg.get('island', {})
     self.name = island.get('name', 'island')
-    self.poles = [parse_addr(p) for p in island.get('poles', ['192.168.89.255'])]
+    poles = island.get('poles', 'auto')
+    self.auto = poles == 'auto'
+    self.auto_port = int(island.get('port', 6454))
+    self.auto_mode = None
+    if self.auto:
+      self.auto_mode, found = auto_poles(self.auto_port)
+      self.poles = found or [('192.168.89.255', self.auto_port)]
+    else:
+      self.poles = [parse_addr(p) for p in poles]
     self.brightness = min(1.0, max(0.0, float(island.get('brightness', 0.4))))
     self.control = parse_addr(island.get('control', '127.0.0.1:6455'))
 
@@ -214,6 +249,7 @@ class Controller:
       'since': self.since,
       'brightness': self.brightness,
       'poles': [f'{h}:{p}' for h, p in self.poles],
+      'poles_auto': {'network_mode': self.auto_mode} if self.auto else None,
       'frames': self.frames,
       'last_frame_age': round(time.time() - self.last_frame, 2) if self.last_frame else None,
       'errors': self.errors,
@@ -264,13 +300,29 @@ class Controller:
     """Enforce cue durations and pending switches. Some effects ignore the
     runtime argument, and Effect.run resets quit when it starts, so a
     command arriving at that moment would otherwise be lost."""
+    next_poles_check = 0
     while self.running:
       with self.lock:
         if self.current and (self.pending or (self.deadline and time.time() >= self.deadline)):
           self.current.quit = True
           self.abort = True
+      if self.auto and time.time() >= next_poles_check:
+        next_poles_check = time.time() + 5
+        self.follow_network()
       time.sleep(0.1)
 
+  def follow_network(self):
+    """poles = "auto": send wherever the network module puts the poles now."""
+    try:
+      mode, found = auto_poles(self.auto_port)
+    except Exception as e:  # never let this stop the stream
+      log.error('auto poles: %s', e)
+      return
+    self.auto_mode = mode
+    if found and found != self.poles:
+      log.info('network %s: now sending to %s', mode, ', '.join(f'{h}:{p}' for h, p in found))
+      self.poles = found
+      self.strip2D.strip.artnet.addr = list(found)
   def play(self):
     while self.running:
       effect = self.pick()

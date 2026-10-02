@@ -14,9 +14,12 @@ Modes
           address and a DHCP server for the poles.
 
 Nothing changes on start: changes happen on set_config only. Each change is
-checked first (a Wi-Fi with internet for the wifi mode, no other DHCP server
-on the Art-Net link) and rolled back if management loses its internet
-connection afterwards.
+checked first (a Wi-Fi with internet for the wifi mode, a cable on eth0 for
+the Ethernet modes, no other DHCP server on the Art-Net link) and rolled back
+if management loses its internet connection afterwards.
+
+While management runs over Ethernet (shared, vlan), Wi-Fi can be connected
+and disconnected; in the wifi mode it is locked, since it carries management.
 
 Config: /etc/ledpoles/network.json. Commands (JSON over UDP 127.0.0.1:6456):
   {"cmd": "status"}
@@ -24,6 +27,10 @@ Config: /etc/ledpoles/network.json. Commands (JSON over UDP 127.0.0.1:6456):
    "pi_address": "192.168.89.1", "dhcp_start": "192.168.89.2", "dhcp_end": "192.168.89.50"}
   {"cmd": "add_reservation", "mac": "70:69:69:2d:30:31", "ip": "192.168.89.2", "name": "pole01"}
   {"cmd": "remove_reservation", "mac": "70:69:69:2d:30:31"}
+  {"cmd": "wifi_rescan"}
+  {"cmd": "wifi_connect", "profile": "netplan-wlan0-24IT"}       saved network
+  {"cmd": "wifi_connect", "ssid": "Name", "password": "..."}    new network
+  {"cmd": "wifi_disconnect"}
 """
 
 import copy
@@ -162,10 +169,16 @@ def validate(cfg, mgmt=None):
 
 # --- system helpers -----------------------------------------------------------------
 
-def run(*cmd, check=True, timeout=30):
-  r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def run(*cmd, check=True, timeout=30, secret=None):
+  """Run a command; on failure raise with its output. `secret` (a password
+  on the command line) is masked in the error."""
+  try:
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+  except subprocess.TimeoutExpired:
+    raise RuntimeError(f'{cmd[0]} {cmd[1] if len(cmd) > 1 else ""}: no answer within {timeout} s')
   if check and r.returncode != 0:
-    raise RuntimeError(f"{' '.join(cmd)}: {(r.stderr or r.stdout).strip()}")
+    msg = f"{' '.join(cmd)}: {(r.stderr or r.stdout).strip()}"
+    raise RuntimeError(msg.replace(secret, '***') if secret else msg)
   return r.stdout
 
 
@@ -197,6 +210,41 @@ def wifi_info(wifi):
 def reaches_internet(iface):
   return subprocess.run(['ping', '-c', '1', '-W', '2', '-I', iface, CHECK_HOST],
                         capture_output=True).returncode == 0
+
+
+def carrier(iface):
+  """True when the interface has a link (cable plugged in, other end up)."""
+  try:
+    with open(f'/sys/class/net/{iface}/carrier') as f:
+      return f.read().strip() == '1'
+  except OSError:
+    return False
+
+
+def split_terse(line):
+  """Split an `nmcli -t` line on unescaped colons."""
+  return [p.replace('\\:', ':').replace('\\\\', '\\') for p in re.split(r'(?<!\\):', line)]
+
+
+def wifi_profiles():
+  out = []
+  for line in run('nmcli', '-t', '-f', 'NAME,TYPE,AUTOCONNECT,ACTIVE', 'con', 'show', check=False).splitlines():
+    name, ctype, auto, active = (split_terse(line) + [''] * 4)[:4]
+    if ctype == '802-11-wireless':
+      ssid = run('nmcli', '-g', '802-11-wireless.ssid', 'con', 'show', name, check=False).strip()
+      out.append({'name': name, 'ssid': ssid, 'autoconnect': auto == 'yes', 'active': active == 'yes'})
+  return out
+
+
+def wifi_visible(wifi):
+  """Networks from the last scan (no new scan: that takes seconds)."""
+  seen = {}
+  out = run('nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list', 'ifname', wifi, '--rescan', 'no', check=False)
+  for line in out.splitlines():
+    ssid, signal, security = (split_terse(line) + [''] * 3)[:3]
+    if ssid and (ssid not in seen or int(signal or 0) > seen[ssid]['signal']):
+      seen[ssid] = {'ssid': ssid, 'signal': int(signal or 0), 'security': security or 'open'}
+  return sorted(seen.values(), key=lambda n: -n['signal'])
 
 
 def dhcp_servers(iface, ignore=(), timeout=3.0):
@@ -319,6 +367,9 @@ def apply(cfg, probe=True):
       if others:
         raise Refused(f"{eth} is on a network with a DHCP server ({', '.join(others)}); "
                       'connect it to the pole switch first, or the Pi would hand out addresses there')
+  elif probe and not carrier(eth):
+    # Management would move to (or stay on) eth0: it needs a cable.
+    raise Refused(f'{eth} has no network link; plug it into a network first')
 
   dhcp_off()
   delete_profile()
@@ -372,6 +423,8 @@ class NetConf:
     self.lock = threading.Lock()
     self.applying = None       # mode being applied
     self.last = None           # result of the last change
+    self.wifi_busy = None      # Wi-Fi action running in the background
+    self.wifi_last = None      # its result
 
   def _apply_in_background(self, new):
     old = copy.deepcopy(self.cfg)
@@ -410,8 +463,9 @@ class NetConf:
       validate(new)  # also checks every reservation still fits a new subnet
       self.applying = new['mode']
     threading.Thread(target=self._apply_in_background, args=(new,), daemon=True).start()
-    time.sleep(0.2)
-    return self.status()
+    # A short reply: the full status calls nmcli several times, which is slow
+    # while NetworkManager is busy with this change. The page polls status.
+    return {'ok': True, 'applying': new['mode']}
 
   def change_reservations(self, change):
     with self.lock:
@@ -425,7 +479,7 @@ class NetConf:
       save(new)
       if new['mode'] != 'shared':
         dhcp_on(new)   # rewrite and restart; leases are kept
-    return self.status()
+    return {'ok': True, 'reservations': new['reservations']}
 
   def add_reservation(self, msg):
     entry = {'mac': str(msg.get('mac', '')).strip().lower().replace('-', ':'),
@@ -442,6 +496,67 @@ class NetConf:
       return {'error': f'no reservation for {mac}'}
     return self.change_reservations(lambda res: res.__setitem__(slice(None), [r for r in res if r['mac'] != mac]))
 
+  # --- Wi-Fi while management runs over Ethernet ---------------------------------
+
+  def _wifi_job(self, label, fn):
+    try:
+      fn()
+      self.wifi_last = {'ok': True, 'action': label, 'at': time.time()}
+      log.info('wifi: %s', label)
+    except Exception as e:
+      self.wifi_last = {'ok': False, 'action': label, 'at': time.time(), 'error': str(e)}
+      log.warning('wifi: %s failed: %s', label, e)
+    finally:
+      self.wifi_busy = None
+
+  def _wifi_action(self, label, fn):
+    with self.lock:
+      if self.applying:
+        return {'error': f'still applying {self.applying}'}
+      if self.cfg['mode'] == 'wifi':
+        return {'error': 'Wi-Fi carries management in this mode; switch management back to Ethernet first'}
+      if self.wifi_busy:
+        return {'error': f'Wi-Fi is busy: {self.wifi_busy}'}
+      self.wifi_busy = label
+    threading.Thread(target=self._wifi_job, args=(label, fn), daemon=True).start()
+    return {'ok': True, 'wifi_busy': label}
+
+  def wifi_connect(self, msg):
+    wifi = self.cfg['wifi']
+    if msg.get('profile'):
+      name = str(msg['profile'])
+      if name not in [p['name'] for p in wifi_profiles()]:
+        return {'error': f'no saved Wi-Fi network {name!r}'}
+      def fn():
+        run('nmcli', 'con', 'mod', name, 'connection.autoconnect', 'yes')
+        run('nmcli', 'con', 'up', name, 'ifname', wifi, timeout=90)
+      return self._wifi_action(f'connect to {name}', fn)
+    ssid, password = str(msg.get('ssid') or ''), str(msg.get('password') or '')
+    if not 1 <= len(ssid.encode()) <= 32:
+      return {'error': 'network name: 1 to 32 characters'}
+    if password and not 8 <= len(password) <= 63:
+      return {'error': 'password: 8 to 63 characters (or empty for an open network)'}
+    def fn():
+      cmd = ['nmcli', 'dev', 'wifi', 'connect', ssid, 'ifname', wifi]
+      if password:
+        cmd += ['password', password]
+      run(*cmd, timeout=90, secret=password or None)
+    return self._wifi_action(f'connect to "{ssid}"', fn)
+
+  def wifi_disconnect(self, msg):
+    wifi = self.cfg['wifi']
+    def fn():
+      # Stay off after a reboot too, until connected again from here.
+      for p in wifi_profiles():
+        if p['active']:
+          run('nmcli', 'con', 'mod', p['name'], 'connection.autoconnect', 'no')
+      run('nmcli', 'dev', 'disconnect', wifi, check=False)
+    return self._wifi_action('disconnect', fn)
+
+  def wifi_rescan(self, msg):
+    run('nmcli', 'dev', 'wifi', 'rescan', 'ifname', self.cfg['wifi'], check=False)  # results show up in a few seconds
+    return {'ok': True}
+
   def status(self):
     cfg = self.cfg
     ai = artnet_iface(cfg)
@@ -451,6 +566,8 @@ class NetConf:
       try:
         with open(ISLAND_CONFIG, 'rb') as f:
           poles = tomllib.load(f).get('island', {}).get('poles', [])
+        if poles == 'auto':
+          poles = []   # follows the network by itself
         off = [p for p in poles if ipaddress.ip_address(str(p).split(':')[0]) not in net]
         if off:
           warnings.append(f"the controller sends to {', '.join(off)}, which is not on the Art-Net network {net}")
@@ -470,11 +587,14 @@ class NetConf:
       'interfaces': {
         'management': management_iface(cfg),
         'artnet': ai if cfg['mode'] != 'shared' else cfg['eth'],
-        'eth': {'name': cfg['eth'], 'ipv4': addresses(cfg['eth'])},
-        'wifi': {'name': cfg['wifi'], **wifi_info(cfg['wifi'])},
+        'eth': {'name': cfg['eth'], 'ipv4': addresses(cfg['eth']), 'link': carrier(cfg['eth'])},
+        'wifi': {'name': cfg['wifi'], **wifi_info(cfg['wifi']),
+                 'profiles': wifi_profiles(), 'visible': wifi_visible(cfg['wifi'])},
         'artnet_ipv4': addresses(ai) if cfg['mode'] != 'shared' else [],
       },
       'dhcp': {'active': dhcp_active, 'leases': leases() if dhcp_active or cfg['mode'] != 'shared' else []},
+      'wifi_busy': self.wifi_busy,
+      'wifi_last': self.wifi_last,
       'warnings': warnings,
     }
 
@@ -489,6 +609,8 @@ class NetConf:
         return self.add_reservation(msg)
       if cmd == 'remove_reservation':
         return self.remove_reservation(msg)
+      if cmd in ('wifi_connect', 'wifi_disconnect', 'wifi_rescan'):
+        return getattr(self, cmd)(msg)
       return {'error': f'unknown command {cmd!r}'}
     except ValueError as e:
       return {'error': str(e)}

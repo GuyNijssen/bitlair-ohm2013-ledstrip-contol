@@ -13,6 +13,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ['STATE_DIRECTORY'] = tempfile.mkdtemp()
+os.environ['NETCONF_CONFIG'] = os.path.join(os.environ['STATE_DIRECTORY'], 'network.json')
 import netconf  # noqa: E402
 
 OFFICE = {'eth0': ['10.10.192.113/24'], 'wlan0': ['10.10.192.115/24']}
@@ -77,6 +78,26 @@ check('dhcp-host=70:69:69:2d:30:32,192.168.89.3\n' in conf, 'dnsmasq: unnamed re
 cfg['mode'] = 'wifi'
 netconf.write_dnsmasq(cfg)
 check('interface=eth0\n' in open(netconf.DNSMASQ_CONF).read(), 'dnsmasq: wifi mode serves eth0')
+
+# Wi-Fi carries management in the wifi mode: the daemon refuses to touch it
+# (whatever the page shows). Refused before any system call.
+netconf.save({**netconf.DEFAULTS, 'mode': 'wifi'})
+nc = netconf.NetConf()
+r = nc.handle({'cmd': 'wifi_disconnect'})
+check('carries management' in r.get('error', ''), 'wifi mode: disconnect refused')
+r = nc.handle({'cmd': 'wifi_connect', 'ssid': 'Other', 'password': 'secret-pass'})
+check('carries management' in r.get('error', ''), 'wifi mode: connecting another network refused')
+check(nc.wifi_busy is None, 'nothing started')
+nc.cfg['mode'] = 'shared'
+check('1 to 32' in nc.handle({'cmd': 'wifi_connect', 'ssid': ''})['error'], 'empty network name refused')
+check('8 to 63' in nc.handle({'cmd': 'wifi_connect', 'ssid': 'X', 'password': 'short'})['error'], 'short password refused')
+
+# A failing command never shows the password.
+try:
+  netconf.run(sys.executable, '-c', 'import sys; sys.exit("bad")', 'password', 'hunter2-secret', secret='hunter2-secret')
+  check(False, 'failing command raises')
+except RuntimeError as e:
+  check('hunter2-secret' not in str(e) and '***' in str(e), 'password masked in errors')
 
 if failures:
   sys.exit(1)
