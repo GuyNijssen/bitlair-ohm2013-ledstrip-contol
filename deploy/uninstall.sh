@@ -5,9 +5,9 @@
 # before uninstalling (or delete the NetworkManager profile "artnet" and set
 # autoconnect on the eth0 profile).
 set -eu
-systemctl disable --now pimod-artnet.service pimod-artnet-net.service ledpoles-dhcp.service 2>/dev/null || true
+systemctl disable --now ledpoles-boot.service pimod-artnet.service pimod-artnet-net.service ledpoles-dhcp.service 2>/dev/null || true
 rm -f /etc/systemd/system/pimod-artnet.service /etc/systemd/system/pimod-artnet-net.service \
-  /etc/systemd/system/ledpoles-dhcp.service \
+  /etc/systemd/system/ledpoles-dhcp.service /etc/systemd/system/ledpoles-boot.service \
   /etc/pi-agent/modules.d/artnet.toml /etc/pi-agent/modules.d/artnet-net.toml
 systemctl daemon-reload
 rm -rf /opt/ledpoles

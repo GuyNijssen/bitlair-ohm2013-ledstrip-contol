@@ -1,0 +1,13 @@
+[Unit]
+Description=Start the LED poles controller at boot if it was running when the Pi went down
+After=network-online.target pimod-artnet-net.service
+Wants=network-online.target
+# Set by pimod-artnet.service on start, removed when someone stops it.
+ConditionPathExists=/var/lib/ledpoles-controller/run-at-boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl start --no-block pimod-artnet.service
+
+[Install]
+WantedBy=multi-user.target

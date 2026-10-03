@@ -13,6 +13,16 @@ StandardInput=null
 # The poles reset to white after 60 s without frames: come back fast.
 Restart=always
 RestartSec=1
+
+# Start at boot only if it was running when the Pi went down (shutdown,
+# halt or power failure), not when it had been stopped. The marker is set
+# on every start and only removed when the service is stopped while the
+# system is running, i.e. by someone; not during a shutdown, and a power
+# failure stops nothing. ledpoles-boot.service checks it at boot. This
+# unit itself is not enabled, so a manual start always works.
+StateDirectory=ledpoles-controller
+ExecStartPost=/usr/bin/touch /var/lib/ledpoles-controller/run-at-boot
+ExecStopPost=/bin/sh -c 'systemctl is-system-running | grep -q stopping || rm -f /var/lib/ledpoles-controller/run-at-boot'
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
