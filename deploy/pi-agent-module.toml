@@ -5,4 +5,7 @@ unit = "pimod-artnet.service"
 # JSON-over-UDP control port of the controller (see island/controller.py).
 control = "127.0.0.1:6455"
 actions = ["next", "idle", "cue", "play", "set_idle"]
-note = "When stopped, the poles reset to dim white after about 68 s. It starts at boot only if it was running when the Pi went down."
+note = "When stopped, the poles reset to dim white after about 68 s."
+# Boot rule (deploy/ledpoles-boot.service): starts at boot only if this marker exists.
+boot_marker = "/var/lib/ledpoles-controller/run-at-boot"
+boot_rule = "only if it was running when the Pi went down"
