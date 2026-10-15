@@ -27,8 +27,8 @@ Wi-Fi), it opens a Wi-Fi access point named after the Pi (WPA2, password
 "hotspot_password", default pipipipi) at 10.42.0.1. Every name looked up
 there points at the Pi (captive portal), so a phone shows the Pi's page
 (pi-agent, also on port 80 of that address). It goes back as soon as eth0
-has an address again (Ethernet modes) or, in the wifi mode, every 5 minutes
-while no phone is connected: then the saved networks get 45 s. Connecting a
+has an address again (Ethernet modes), and in every mode every 5 minutes
+while no phone is connected: then the saved Wi-Fi networks get 45 s. Connecting a
 Wi-Fi network from the page also ends it. "hotspot": false switches it off.
 
 Config: /etc/ledpoles/network.json. Commands (JSON over UDP 127.0.0.1:6456):
@@ -719,9 +719,9 @@ class NetConf:
   def reachable_step(self):
     """No management connection for HOTSPOT_GRACE s: the fallback hotspot
     goes on, so a phone can still reach the Pi. While it is on: off again
-    when eth0 has an address (Ethernet modes); in the wifi mode the saved
-    networks get HOTSPOT_TRY s every HOTSPOT_RETRY s, but not while a phone
-    is connected. Started by hand it stays until hotspot_until (and while a
+    when eth0 has an address (Ethernet modes), and in every mode the saved
+    Wi-Fi networks get HOTSPOT_TRY s every HOTSPOT_RETRY s, but not while a
+    phone is connected. Started by hand it stays until hotspot_until (and while a
     phone is connected)."""
     cfg = self.cfg
     if self.applying or self.wifi_busy:
@@ -736,7 +736,9 @@ class NetConf:
         self._hotspot_stop('time is up')
       elif not by_hand and cfg['mode'] != 'wifi' and addresses(cfg['eth']):
         self._hotspot_stop(f"{cfg['eth']} has an address again")
-      elif not by_hand and cfg['mode'] == 'wifi' and now >= self.next_try and not hotspot_clients(cfg['wifi']):
+      # In every mode: an Ethernet mode can still run its management over
+      # Wi-Fi (no cable on eth0), and waiting for eth0 alone never ends then.
+      elif not by_hand and now >= self.next_try and not hotspot_clients(cfg['wifi']):
         self._hotspot_stop('trying the saved Wi-Fi networks')
         end = time.time() + HOTSPOT_TRY
         while time.time() < end and not management_ok(cfg):
